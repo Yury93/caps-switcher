@@ -1,4 +1,4 @@
-// CapsSwitcher — переключает уже набранный текст между русской и английской раскладкой по F1.
+// FlipKey — переключает уже набранный текст между русской и английской раскладкой по F1.
 // Компилируется встроенным в Windows компилятором .NET Framework 4.x (C# 5), без внешних зависимостей.
 
 using System;
@@ -10,11 +10,11 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("CapsSwitcher")]
-[assembly: System.Reflection.AssemblyProduct("CapsSwitcher")]
+[assembly: System.Reflection.AssemblyTitle("FlipKey")]
+[assembly: System.Reflection.AssemblyProduct("FlipKey")]
 [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
 
-namespace CapsSwitcher
+namespace FlipKey
 {
     public static class LayoutConverter
     {
@@ -133,10 +133,10 @@ namespace CapsSwitcher
     class TrayApp : Form
     {
         const int HotkeyId = 0xCA95;
-        const string AppName = "CapsSwitcher";
+        const string AppName = "FlipKey";
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-        const string SettingsKey = @"Software\CapsSwitcher";
+        const string SettingsKey = @"Software\FlipKey";
         const uint MOD_ALT = 1, MOD_CONTROL = 2, MOD_SHIFT = 4, MOD_NOREPEAT = 0x4000;
 
         class HotkeyOption
@@ -425,8 +425,8 @@ namespace CapsSwitcher
         {
             Icon old = tray.Icon;
             tray.Icon = MakeIcon(enabled);
-            tray.Text = enabled ? "CapsSwitcher: " + hotkey.Name + " — сменить раскладку текста" : "CapsSwitcher: выключено";
-            titleItem.Text = "CapsSwitcher — " + hotkey.Name + " меняет раскладку текста";
+            tray.Text = enabled ? "FlipKey: " + hotkey.Name + " — сменить раскладку текста" : "FlipKey: выключено";
+            titleItem.Text = "FlipKey — " + hotkey.Name + " меняет раскладку текста";
             foreach (ToolStripItem item in hotkeyMenu.DropDownItems)
             {
                 ToolStripMenuItem mi = item as ToolStripMenuItem;
@@ -493,7 +493,7 @@ namespace CapsSwitcher
         static void Main()
         {
             bool created;
-            using (Mutex mutex = new Mutex(true, @"Local\CapsSwitcher.SingleInstance", out created))
+            using (Mutex mutex = new Mutex(true, @"Local\FlipKey.SingleInstance", out created))
             {
                 if (!created) return; // уже запущена
                 Application.EnableVisualStyles();

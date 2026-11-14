@@ -1,4 +1,4 @@
-# CapsSwitcher
+# FlipKey
 
 Маленькая программа для Windows 10/11: набрали текст не в той раскладке — нажмите **F1**, и он превратится в правильный.
 
@@ -16,14 +16,16 @@ Ghbdtn? rfr ltkf&   →  F1  →  Привет, как дела?
 **Вариант 1 — одной командой.** Откройте PowerShell и вставьте:
 
 ```powershell
-irm https://raw.githubusercontent.com/Yury93/caps-switcher/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Yury93/flip-key/main/install.ps1 | iex
 ```
 
 **Вариант 2 — из архива.** Скачайте репозиторий (Code → Download ZIP), распакуйте и дважды кликните `install.cmd`.
 
 Установщик собирает программу встроенным в Windows компилятором .NET Framework, кладёт её в
-`%LOCALAPPDATA%\CapsSwitcher`, добавляет в автозагрузку и сразу запускает. Повторный запуск установщика
+`%LOCALAPPDATA%\FlipKey`, добавляет в автозагрузку и сразу запускает. Повторный запуск установщика
 обновляет программу.
+
+Раньше программа называлась **CapsSwitcher**. Установщик сам удалит старую версию и перенесёт выбранную клавишу.
 
 Удаление: `uninstall.cmd`.
 
