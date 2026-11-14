@@ -89,12 +89,33 @@ namespace CapsSwitcher
         [StructLayout(LayoutKind.Sequential)]
         public struct INPUT { public uint type; public InputUnion u; }
 
+        public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+
+        [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+        [DllImport("user32.dll")] public static extern int GetKeyboardLayoutList(int n, IntPtr[] list);
+
+        static bool IsExtended(Keys vk)
+        {
+            switch (vk)
+            {
+                case Keys.Home: case Keys.End: case Keys.Insert: case Keys.Delete:
+                case Keys.PageUp: case Keys.PageDown:
+                case Keys.Left: case Keys.Right: case Keys.Up: case Keys.Down:
+                    return true;
+            }
+            return false;
+        }
+
         static INPUT Key(Keys vk, bool up)
         {
             INPUT inp = new INPUT();
             inp.type = INPUT_KEYBOARD;
             inp.u.ki.wVk = (ushort)vk;
-            inp.u.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+            // Скан-код обязателен: Chrome, Telegram и др. игнорируют нажатия без него.
+            inp.u.ki.wScan = (ushort)MapVirtualKey((uint)vk, 0);
+            uint flags = up ? KEYEVENTF_KEYUP : 0;
+            if (IsExtended(vk)) flags |= KEYEVENTF_EXTENDEDKEY; // иначе Home при NumLock = «7» на цифровом блоке
+            inp.u.ki.dwFlags = flags;
             return inp;
         }
 
@@ -115,9 +136,34 @@ namespace CapsSwitcher
         const string AppName = "CapsSwitcher";
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
+        const string SettingsKey = @"Software\CapsSwitcher";
+        const uint MOD_ALT = 1, MOD_CONTROL = 2, MOD_SHIFT = 4, MOD_NOREPEAT = 0x4000;
+
+        class HotkeyOption
+        {
+            public readonly string Name; public readonly uint Mods; public readonly Keys Vk;
+            public HotkeyOption(string name, uint mods, Keys vk) { Name = name; Mods = mods; Vk = vk; }
+        }
+
+        static readonly HotkeyOption[] HotkeyOptions =
+        {
+            new HotkeyOption("F1", 0, Keys.F1),
+            new HotkeyOption("F2", 0, Keys.F2),
+            new HotkeyOption("F12", 0, Keys.F12),
+            new HotkeyOption("Pause/Break", 0, Keys.Pause),
+            new HotkeyOption("Scroll Lock", 0, Keys.Scroll),
+            new HotkeyOption("Shift+F1", MOD_SHIFT, Keys.F1),
+            new HotkeyOption("Ctrl+Shift+Space", MOD_CONTROL | MOD_SHIFT, Keys.Space),
+            new HotkeyOption("Alt+Shift+Space", MOD_ALT | MOD_SHIFT, Keys.Space),
+        };
+
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ToolStripMenuItem enabledItem;
         readonly ToolStripMenuItem autostartItem;
+        readonly ToolStripMenuItem hotkeyMenu;
+        readonly ToolStripMenuItem titleItem;
+        HotkeyOption hotkey = HotkeyOptions[0];
+        bool hotkeyRegistered;
         bool enabled = true;
         bool busy;
 
@@ -125,14 +171,25 @@ namespace CapsSwitcher
         {
             ShowInTaskbar = false;
 
+            hotkey = LoadHotkey();
+
             ContextMenuStrip menu = new ContextMenuStrip();
-            ToolStripMenuItem title = new ToolStripMenuItem("CapsSwitcher — F1 меняет раскладку текста");
-            title.Enabled = false;
-            menu.Items.Add(title);
+            titleItem = new ToolStripMenuItem();
+            titleItem.Enabled = false;
+            menu.Items.Add(titleItem);
             menu.Items.Add(new ToolStripSeparator());
             enabledItem = new ToolStripMenuItem("Включено", null, delegate { SetEnabled(!enabled); });
             enabledItem.Checked = true;
             menu.Items.Add(enabledItem);
+            hotkeyMenu = new ToolStripMenuItem("Клавиша");
+            foreach (HotkeyOption opt in HotkeyOptions)
+            {
+                HotkeyOption captured = opt;
+                ToolStripMenuItem item = new ToolStripMenuItem(opt.Name, null, delegate { ChangeHotkey(captured); });
+                item.Tag = opt;
+                hotkeyMenu.DropDownItems.Add(item);
+            }
+            menu.Items.Add(hotkeyMenu);
             autostartItem = new ToolStripMenuItem("Запускать вместе с Windows", null, delegate { ToggleAutostart(); });
             autostartItem.Checked = IsAutostart();
             menu.Items.Add(autostartItem);
@@ -156,11 +213,42 @@ namespace CapsSwitcher
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            if (!Native.RegisterHotKey(Handle, HotkeyId, 0, (uint)Keys.F1))
+            RegisterCurrentHotkey();
+        }
+
+        bool RegisterCurrentHotkey()
+        {
+            if (hotkeyRegistered) Native.UnregisterHotKey(Handle, HotkeyId);
+            hotkeyRegistered = Native.RegisterHotKey(Handle, HotkeyId, hotkey.Mods | MOD_NOREPEAT, (uint)hotkey.Vk);
+            if (!hotkeyRegistered)
+                tray.ShowBalloonTip(5000, AppName, "Не удалось занять клавишу " + hotkey.Name +
+                    " — её уже использует другая программа. Выберите другую в меню «Клавиша».", ToolTipIcon.Warning);
+            UpdateTray();
+            return hotkeyRegistered;
+        }
+
+        void ChangeHotkey(HotkeyOption opt)
+        {
+            hotkey = opt;
+            if (RegisterCurrentHotkey())
             {
-                tray.ShowBalloonTip(5000, AppName,
-                    "Не удалось занять клавишу F1 — её уже использует другая программа.", ToolTipIcon.Warning);
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(SettingsKey)) k.SetValue("Hotkey", opt.Name);
+                tray.ShowBalloonTip(2000, AppName, "Теперь раскладку текста меняет " + opt.Name, ToolTipIcon.Info);
             }
+        }
+
+        static HotkeyOption LoadHotkey()
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(SettingsKey))
+                {
+                    string name = k == null ? null : k.GetValue("Hotkey") as string;
+                    foreach (HotkeyOption opt in HotkeyOptions) if (opt.Name == name) return opt;
+                }
+            }
+            catch { }
+            return HotkeyOptions[0];
         }
 
         void ExitApp()
@@ -203,7 +291,7 @@ namespace CapsSwitcher
             if (string.IsNullOrEmpty(text))
             {
                 Native.Chord(Keys.ControlKey, Keys.ShiftKey, Keys.Home);
-                Thread.Sleep(30);
+                Pump(80);
                 text = CopyFromApp(new[] { Keys.ControlKey, Keys.C });
             }
 
@@ -218,21 +306,37 @@ namespace CapsSwitcher
 
             SetClipboardText(converted);
             Native.Chord(Keys.ControlKey, Keys.V);
-            Thread.Sleep(150); // даём приложению вставить текст, прежде чем вернуть буфер обмена
+            Pump(150); // даём приложению вставить текст, прежде чем вернуть буфер обмена
 
             SwitchLayout(target, toEnglish);
             RestoreClipboard(saved);
         }
 
-        static void WaitForModifiersReleased()
+        /// <summary>
+        /// Пауза, во время которой окно продолжает обрабатывать сообщения Windows.
+        /// Thread.Sleep здесь нельзя: пока наш поток спит, другая программа не может
+        /// записать в буфер обмена (Windows ждёт ответа от нас как от его владельца).
+        /// </summary>
+        static void Pump(int ms)
         {
-            int[] vks = { 0x10, 0x11, 0x12, 0x5B, 0x5C, 0x70 }; // Shift, Ctrl, Alt, Win, Win, F1
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            do
+            {
+                Application.DoEvents();
+                Thread.Sleep(1);
+            } while (sw.ElapsedMilliseconds < ms);
+        }
+
+        void WaitForModifiersReleased()
+        {
+            // Ждём, пока пользователь отпустит горячую клавишу, иначе она смешается с нашими Ctrl+C / Ctrl+V.
+            int[] vks = { 0x10, 0x11, 0x12, 0x5B, 0x5C, (int)hotkey.Vk }; // Shift, Ctrl, Alt, Win, Win, сама клавиша
             for (int i = 0; i < 100; i++)
             {
                 bool pressed = false;
                 foreach (int vk in vks) if ((Native.GetAsyncKeyState(vk) & 0x8000) != 0) pressed = true;
                 if (!pressed) return;
-                Thread.Sleep(10);
+                Pump(10);
             }
         }
 
@@ -243,10 +347,10 @@ namespace CapsSwitcher
             Native.Chord(chord);
             for (int i = 0; i < 40; i++) // до ~400 мс
             {
-                Thread.Sleep(10);
+                Pump(10);
                 if (Native.GetClipboardSequenceNumber() != before)
                 {
-                    Thread.Sleep(20);
+                    Pump(20);
                     try { if (Clipboard.ContainsText()) return Clipboard.GetText(); } catch { }
                 }
             }
@@ -258,7 +362,7 @@ namespace CapsSwitcher
             for (int i = 0; i < 10; i++)
             {
                 try { Clipboard.SetText(text); return; }
-                catch (ExternalException) { Thread.Sleep(20); }
+                catch (ExternalException) { Pump(20); }
             }
         }
 
@@ -289,15 +393,22 @@ namespace CapsSwitcher
                     else Clipboard.SetDataObject(saved, true);
                     return;
                 }
-                catch (ExternalException) { Thread.Sleep(20); }
+                catch (ExternalException) { Pump(20); }
             }
         }
 
         static void SwitchLayout(IntPtr window, bool toEnglish)
         {
             // После исправления текста переключаем раскладку окна, чтобы дальше печаталось правильно.
-            IntPtr hkl = Native.LoadKeyboardLayout(toEnglish ? "00000409" : "00000419", 0);
-            if (hkl != IntPtr.Zero && window != IntPtr.Zero)
+            // Берём раскладку из уже установленных в системе (любая английская / русская).
+            int lang = toEnglish ? 0x09 : 0x19;
+            IntPtr[] list = new IntPtr[32];
+            int n = Native.GetKeyboardLayoutList(list.Length, list);
+            IntPtr hkl = IntPtr.Zero;
+            for (int i = 0; i < n; i++)
+                if (((list[i].ToInt64() & 0xFFFF) & 0x3FF) == lang) { hkl = list[i]; break; }
+            if (hkl == IntPtr.Zero) return;
+            if (window != IntPtr.Zero)
                 Native.PostMessage(window, Native.WM_INPUTLANGCHANGEREQUEST, IntPtr.Zero, hkl);
         }
 
@@ -314,7 +425,13 @@ namespace CapsSwitcher
         {
             Icon old = tray.Icon;
             tray.Icon = MakeIcon(enabled);
-            tray.Text = enabled ? "CapsSwitcher: F1 — сменить раскладку текста" : "CapsSwitcher: выключено";
+            tray.Text = enabled ? "CapsSwitcher: " + hotkey.Name + " — сменить раскладку текста" : "CapsSwitcher: выключено";
+            titleItem.Text = "CapsSwitcher — " + hotkey.Name + " меняет раскладку текста";
+            foreach (ToolStripItem item in hotkeyMenu.DropDownItems)
+            {
+                ToolStripMenuItem mi = item as ToolStripMenuItem;
+                if (mi != null) mi.Checked = (mi.Tag == hotkey);
+            }
             if (old != null) { Native.DestroyIcon(old.Handle); old.Dispose(); }
         }
 
@@ -358,12 +475,13 @@ namespace CapsSwitcher
         void ShowHelp()
         {
             MessageBox.Show(
-                "Набрали текст не в той раскладке? Нажмите F1.\n\n" +
+                "Набрали текст не в той раскладке? Нажмите " + hotkey.Name + ".\n" +
+                "(Клавишу можно сменить в меню «Клавиша».)\n\n" +
                 "• Если текст выделен — переключится выделенный текст.\n" +
                 "• Если ничего не выделено — весь текст от курсора до начала поля ввода.\n\n" +
                 "Направление определяется автоматически (рус → англ или англ → рус),\n" +
                 "после этого раскладка окна тоже переключается.\n" +
-                "Повторное нажатие F1 возвращает как было (или Ctrl+Z).\n\n" +
+                "Повторное нажатие возвращает как было (или Ctrl+Z).\n\n" +
                 "Двойной клик по значку в трее — включить/выключить.",
                 AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
